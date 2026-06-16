@@ -77,7 +77,17 @@ export const useSetupGlobalSocketForPage = (): void => {
 
     socket.emit(SocketEventName.JoinPage, { pageId });
 
+    // Re-emit JoinPage on auto-reconnect to restore page room subscription.
+    // socket.io reconnects internally, reusing the same socket instance,
+    // so this effect's dependency array won't re-trigger. The explicit
+    // 'connect' listener ensures the room is re-joined after reconnection.
+    const handleConnect = () => {
+      socket.emit(SocketEventName.JoinPage, { pageId });
+    };
+    socket.on('connect', handleConnect);
+
     return () => {
+      socket.off('connect', handleConnect);
       socket.emit(SocketEventName.LeavePage, { pageId });
     };
   }, [pageId, socket]);
