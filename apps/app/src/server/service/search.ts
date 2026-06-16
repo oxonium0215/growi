@@ -348,6 +348,10 @@ class SearchService implements SearchQueryParser, SearchResolver {
     return this.fullTextSearchDelegator.getInfoForAdmin();
   }
 
+  async getAuditlogInfoForAdmin() {
+    return this.fullTextSearchDelegator.getAuditlogInfoForAdmin();
+  }
+
   async normalizeIndices() {
     return this.fullTextSearchDelegator.normalizeIndices();
   }
