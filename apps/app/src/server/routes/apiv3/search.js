@@ -1,11 +1,11 @@
 import { SCOPE } from '@growi/core/dist/interfaces';
 import { ErrorV3 } from '@growi/core/dist/models';
 
+import { AuditlogEsSyncStatus } from '~/features/auditlog-es-sync/server/models/auditlog-es-sync-status';
 import { SupportedAction } from '~/interfaces/activity';
 import { accessTokenParser } from '~/server/middlewares/access-token-parser';
 import adminRequiredFactory from '~/server/middlewares/admin-required';
 import loginRequiredFactory from '~/server/middlewares/login-required';
-import { AuditlogEsSyncStatus } from '~/server/models/auditlog-es-sync-status';
 import loggerFactory from '~/utils/logger';
 
 import { generateAddActivityMiddleware } from '../../middlewares/add-activity';

@@ -39,7 +39,6 @@ import NamedQuery from '../models/named-query';
 import type { PageModel } from '../models/page';
 import { SearchError } from '../models/vo/search-error';
 import { hasIntersection } from '../util/compare-objectId';
-import { AuditlogChangeStreamService } from './auditlog-changestream';
 import { configManager } from './config-manager';
 import ElasticsearchDelegator from './search-delegator/elasticsearch';
 import PrivateLegacyPagesDelegator from './search-delegator/private-legacy-pages';
@@ -107,9 +106,6 @@ class SearchService implements SearchQueryParser, SearchResolver {
 
   nqDelegators: { [key in SearchDelegatorName]: SearchDelegator };
 
-  private auditlogChangeStreamService: AuditlogChangeStreamService | null =
-    null;
-
   static async create(crowi: Crowi) {
     const instance = new SearchService();
 
@@ -136,12 +132,6 @@ class SearchService implements SearchQueryParser, SearchResolver {
     if (instance.isConfigured) {
       await instance.fullTextSearchDelegator.init();
       instance.registerUpdateEvent();
-      instance.auditlogChangeStreamService = new AuditlogChangeStreamService(
-        instance.fullTextSearchDelegator,
-      );
-      instance.auditlogChangeStreamService.start().catch((err) => {
-        logger.error(err, 'AuditlogChangeStreamService failed to start.');
-      });
     }
     return instance;
   }
@@ -300,10 +290,6 @@ class SearchService implements SearchQueryParser, SearchResolver {
   resetErrorStatus() {
     this.isErrorOccuredOnHealthcheck = false;
     this.isErrorOccuredOnSearching = false;
-  }
-
-  async close(): Promise<void> {
-    await this.auditlogChangeStreamService?.close();
   }
 
   async reconnectClient() {

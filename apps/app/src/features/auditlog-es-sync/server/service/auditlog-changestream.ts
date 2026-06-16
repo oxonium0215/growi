@@ -1,13 +1,13 @@
 import type { ChangeStream, ChangeStreamOptions } from 'mongodb';
 import mongoose from 'mongoose';
 
+import type { ActivityDocument } from '~/server/models/activity';
+import { configManager } from '~/server/service/config-manager';
+import type ElasticsearchDelegator from '~/server/service/search-delegator/elasticsearch';
 import loggerFactory from '~/utils/logger';
 
-import type { ActivityDocument } from '../models/activity';
 import { AuditlogEsSyncStatus } from '../models/auditlog-es-sync-status';
 import { ChangeStreamResumeToken } from '../models/changestream-resume-token';
-import { configManager } from './config-manager';
-import type ElasticsearchDelegator from './search-delegator/elasticsearch';
 
 const logger = loggerFactory('growi:service:auditlog-changestream');
 
@@ -54,7 +54,10 @@ export class AuditlogChangeStreamService {
   }
 
   async start(): Promise<void> {
-    this.stopped = false;
+    // close() is terminal: once stopped, the service never restarts.
+    // Resetting the flag here would let an in-flight restart() reopen the stream after shutdown.
+    if (this.stopped) return;
+
     const auditLogEnabled = configManager.getConfig('app:auditLogEnabled');
     if (!auditLogEnabled) {
       logger.debug(
@@ -65,6 +68,8 @@ export class AuditlogChangeStreamService {
 
     const Activity = mongoose.model<ActivityDocument>('Activity');
     const token = await ChangeStreamResumeToken.load(STREAM_KEY);
+    if (this.stopped) return;
+
     const options: ChangeStreamOptions =
       token != null ? { resumeAfter: token } : {};
 
@@ -77,12 +82,27 @@ export class AuditlogChangeStreamService {
     logger.info('AuditlogChangeStreamService started.');
   }
 
+  // Retry the initial start like a runtime error, so a transient failure doesn't leave sync dead.
+  async startWithRetry(): Promise<void> {
+    try {
+      await this.start();
+    } catch (err) {
+      logger.error(
+        err,
+        'AuditlogChangeStreamService failed initial start; scheduling restart.',
+      );
+      void this.restart();
+    }
+  }
+
   private async processChangeStream(): Promise<void> {
     if (this.changeStream == null) return;
 
     try {
       for await (const event of this.changeStream) {
+        // Phase 1: ES operation — failures here feed poison-pill detection.
         try {
+          // 'update' skipped: Activity updates change only `action`, which is not indexed in ES.
           if (
             event.operationType === 'insert' &&
             'fullDocument' in event &&
@@ -92,14 +112,12 @@ export class AuditlogChangeStreamService {
           } else if (event.operationType === 'delete') {
             await this.delegator.deleteAuditlog(event.documentKey._id);
           }
-          // Per-event upsert doubles MongoDB writes but keeps the replay window minimal on restart.
-          // Throttle if write frequency becomes a concern.
-          await ChangeStreamResumeToken.upsert(STREAM_KEY, event._id);
           this.consecutiveEventFailures = 0;
           this.lastFailingToken = null;
           this.consecutiveRestarts = 0;
         } catch (err) {
           // ResumeToken is typed as `unknown`; JSON.stringify compares structurally without type assertions.
+          // A false mismatch only resets the counter and delays the poison-pill skip — never causes data loss.
           if (
             JSON.stringify(event._id) !== JSON.stringify(this.lastFailingToken)
           ) {
@@ -116,7 +134,15 @@ export class AuditlogChangeStreamService {
               'Skipping poison pill event after consecutive failures.',
             );
             await AuditlogEsSyncStatus.setUnsynced(true);
-            await ChangeStreamResumeToken.upsert(STREAM_KEY, event._id);
+            // Advance token past the poison pill; failure here means it will be retried on restart.
+            try {
+              await ChangeStreamResumeToken.upsert(STREAM_KEY, event._id);
+            } catch (tokenErr) {
+              logger.error(
+                tokenErr,
+                'Failed to advance token past poison pill; will retry on restart.',
+              );
+            }
             this.consecutiveEventFailures = 0;
             this.lastFailingToken = null;
             this.consecutiveRestarts = 0;
@@ -131,6 +157,20 @@ export class AuditlogChangeStreamService {
           );
           break;
         }
+
+        // Phase 2: persist token — separate from ES failures so token errors do not
+        // affect consecutiveEventFailures or trigger poison-pill detection.
+        // Per-event upsert doubles MongoDB writes but keeps the replay window minimal on restart.
+        // Throttle if write frequency becomes a concern — e.g. the one-time delete burst when
+        // Activity TTL is first enabled on a large backlog.
+        try {
+          await ChangeStreamResumeToken.upsert(STREAM_KEY, event._id);
+        } catch (tokenErr) {
+          logger.error(
+            tokenErr,
+            'Failed to persist resume token; events will be reprocessed on restart.',
+          );
+        }
       }
     } catch (err) {
       if (isChangeStreamHistoryLost(err)) {
@@ -138,7 +178,17 @@ export class AuditlogChangeStreamService {
           'Change stream history lost (oplog truncated). Clearing resume token and restarting from current position.' +
             ' Documents written during the gap are not in Elasticsearch; run reindex to restore consistency.',
         );
-        await ChangeStreamResumeToken.clear(STREAM_KEY);
+        try {
+          await ChangeStreamResumeToken.clear(STREAM_KEY);
+        } catch (clearErr) {
+          // If clear fails, restart would re-read the stale token and immediately hit HistoryLost again.
+          // Stop the service instead; admin must resolve the MongoDB issue and restart the process.
+          logger.error(
+            clearErr,
+            'Failed to clear resume token after history loss. Stopping service to prevent restart loop.',
+          );
+          this.stopped = true;
+        }
         await AuditlogEsSyncStatus.setUnsynced(true);
       } else {
         logger.error(err, 'AuditlogChangeStreamService change stream error.');

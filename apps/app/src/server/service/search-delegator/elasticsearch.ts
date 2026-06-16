@@ -7,13 +7,13 @@ import { Transform, Writable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { URL } from 'url';
 
+import { AuditlogEsSyncStatus } from '~/features/auditlog-es-sync/server/models/auditlog-es-sync-status';
 import type { AuditlogSuggestionField } from '~/interfaces/activity';
 import { SearchDelegatorName } from '~/interfaces/named-query';
 import type { ISearchResult, ISearchResultData } from '~/interfaces/search';
 import { SORT_AXIS, SORT_ORDER } from '~/interfaces/search';
 import { SocketEventName } from '~/interfaces/websocket';
 import type { ActivityDocument } from '~/server/models/activity';
-import { AuditlogEsSyncStatus } from '~/server/models/auditlog-es-sync-status';
 import PageTagRelation from '~/server/models/page-tag-relation';
 import type { SocketIoService } from '~/server/service/socket-io';
 import loggerFactory from '~/utils/logger';
