@@ -154,9 +154,11 @@ export async function findPageAndMetaDataByViewer(
     };
   }
 
-  const creatorId = await pageService.getCreatorIdForCanDelete(page);
-
-  const userRelatedGroups = await pageGrantService.getUserRelatedGroups(user);
+  // Parallelize independent queries: creator ID and user group relations
+  const [creatorId, userRelatedGroups] = await Promise.all([
+    pageService.getCreatorIdForCanDelete(page),
+    pageGrantService.getUserRelatedGroups(user),
+  ]);
 
   const canDeleteUserHomepage = await (async () => {
     // Not a user homepage
@@ -185,11 +187,10 @@ export async function findPageAndMetaDataByViewer(
       userRelatedGroups,
     ); // use normal delete config
 
-  const isBookmarked: boolean = isGuestUser
-    ? false
-    : (await Bookmark.findByPageIdAndUserId(pageId, user._id)) != null;
-
   if (pageInfo.isEmpty) {
+    const isBookmarked: boolean =
+      (await Bookmark.findByPageIdAndUserId(pageId, user._id)) != null;
+
     return {
       data: page,
       meta: {
@@ -205,11 +206,14 @@ export async function findPageAndMetaDataByViewer(
   // so hereafter we can safely
   assert(isIPageInfoForEntity(pageInfo));
 
+  // Parallelize isBookmarked and subscription lookups for entity pages
+  const [isBookmarkedResult, subscription] = await Promise.all([
+    Bookmark.findByPageIdAndUserId(pageId, user._id),
+    Subscription.findByUserIdAndTargetId(user._id, page._id),
+  ]);
+
+  const isBookmarked: boolean = isBookmarkedResult != null;
   const isLiked: boolean = page.isLiked(user);
-  const subscription = await Subscription.findByUserIdAndTargetId(
-    user._id,
-    page._id,
-  );
 
   return {
     data: page,

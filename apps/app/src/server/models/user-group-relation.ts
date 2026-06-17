@@ -5,10 +5,14 @@ import mongoose, { Schema } from 'mongoose';
 import mongoosePaginate from 'mongoose-paginate-v2';
 import uniqueValidator from 'mongoose-unique-validator';
 
+import type { ObjectIdLike } from '../interfaces/mongoose-utils';
+import {
+  requestContextStorage,
+  UserGroupCacheKeys,
+} from '../middlewares/request-context';
+import { getOrCreateModel } from '../util/mongoose-utils';
 import loggerFactory from '~/utils/logger';
 
-import type { ObjectIdLike } from '../interfaces/mongoose-utils';
-import { getOrCreateModel } from '../util/mongoose-utils';
 import { UserStatus } from './user/conts';
 import type { UserGroupDocument } from './user-group';
 
@@ -138,6 +142,8 @@ schema.statics.findAllRelationForUserGroups = function (userGroups) {
 /**
  * find all groups of User
  *
+ * Results are cached per-request to avoid redundant queries.
+ *
  * @static
  * @param {User} user
  * @returns {Promise<UserGroupDocument[]>}
@@ -146,6 +152,15 @@ schema.statics.findAllRelationForUserGroups = function (userGroups) {
 schema.statics.findAllGroupsForUser = async function (
   user,
 ): Promise<UserGroupDocument[]> {
+  const store = requestContextStorage.getStore();
+  if (store != null) {
+    const cacheKey = UserGroupCacheKeys.groups(user._id.toString());
+    const cached = store.get(cacheKey);
+    if (cached != null) {
+      return cached as UserGroupDocument[];
+    }
+  }
+
   // biome-ignore lint/plugin: allow populate for backward compatibility
   const userGroupRelations = await this.find({
     relatedUser: user._id,
@@ -155,13 +170,24 @@ schema.statics.findAllGroupsForUser = async function (
       ? (relation.relatedGroup as unknown as UserGroupDocument)
       : null;
   });
-  return userGroups.filter(
+  const result = userGroups.filter(
     (group): group is NonNullable<UserGroupDocument> => group != null,
   );
+
+  if (store != null) {
+    const cacheKey = UserGroupCacheKeys.groups(user._id.toString());
+    store.set(cacheKey, result);
+  }
+
+  return result;
 };
 
 /**
  * find all UserGroup IDs that related to specified User
+ *
+ * Results are cached per-request to avoid redundant queries when
+ * multiple consumers (page queries, grant checks, page listing)
+ * fetch the same data within a single HTTP request.
  *
  * @static
  * @param {User} user
@@ -170,13 +196,29 @@ schema.statics.findAllGroupsForUser = async function (
 schema.statics.findAllUserGroupIdsRelatedToUser = async function (
   user,
 ): Promise<ObjectIdLike[]> {
+  const store = requestContextStorage.getStore();
+  if (store != null) {
+    const cacheKey = UserGroupCacheKeys.groupIds(user._id.toString());
+    const cached = store.get(cacheKey);
+    if (cached != null) {
+      return cached as ObjectIdLike[];
+    }
+  }
+
   const relations = await this.find({ relatedUser: user._id })
     .select('relatedGroup')
     .exec();
 
-  return relations.map((relation) => {
+  const ids = relations.map((relation) => {
     return getIdForRef(relation.relatedGroup);
   });
+
+  if (store != null) {
+    const cacheKey = UserGroupCacheKeys.groupIds(user._id.toString());
+    store.set(cacheKey, ids);
+  }
+
+  return ids;
 };
 
 /**

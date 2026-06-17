@@ -33,6 +33,8 @@ module.exports = (crowi, app) => {
     require('../middlewares/inject-currentuser-to-localvars')();
   const autoReconnectToS2sMsgServer =
     require('../middlewares/auto-reconnect-to-s2s-msg-server')(crowi);
+  const { requestContextMiddleware } =
+    require('../middlewares/request-context');
   const avoidSessionRoutes = require('../routes/avoid-session-routes');
 
   const env = crowi.node_env;
@@ -154,6 +156,11 @@ module.exports = (crowi, app) => {
   logger.debug('initialize Passport');
   app.use(passport.initialize());
   app.use(passport.session());
+
+  // Initialize per-request context for query caching.
+  // Must be after passport so that req.user is available,
+  // but before route handlers so the cache covers all requests.
+  app.use(requestContextMiddleware);
 
   app.use(flash());
   app.use(mongoSanitize());

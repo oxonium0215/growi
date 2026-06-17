@@ -88,18 +88,23 @@ class PageListingService implements IPageListingService {
       showPagesRestrictedByGroup,
     );
 
-    const pages: HydratedDocument<Omit<IPageForTreeItem, 'processData'>>[] =
-      await queryBuilder
+    // Run the main page query in parallel with the PageOperation lookup.
+    // Both queries are independent and their results are combined afterwards.
+    const [pages, pageOperations] = await Promise.all([
+      queryBuilder
         .addConditionToSortPagesByAscPath()
         .query.select(
           '_id path parent revision descendantCount grant isEmpty wip',
         )
         .lean()
-        .exec();
+        .exec() as Promise<HydratedDocument<Omit<IPageForTreeItem, 'processData'>>[]>,
+      PageOperation.find({ actionType: { $in: [PageActionType.Rename] } }),
+    ]);
 
-    const injectedPages = await this.injectProcessDataIntoPagesByActionTypes(
+    // Inject process data from the pre-fetched page operations
+    const injectedPages = await this.injectProcessDataFromOperations(
       pages,
-      [PageActionType.Rename],
+      pageOperations,
     );
 
     // Type-safe conversion to IPageForTreeItem
@@ -121,6 +126,20 @@ class PageListingService implements IPageListingService {
     const pageOperations = await PageOperation.find({
       actionType: { $in: actionTypes },
     });
+    return this.injectProcessDataFromOperations(pages, pageOperations);
+  }
+
+  /**
+   * Inject processData from pre-fetched PageOperation documents.
+   * This is the synchronous injection step, separated from the query
+   * so that the query can be parallelized with the main page query.
+   */
+  private async injectProcessDataFromOperations<T>(
+    pages: HydratedDocument<T>[],
+    pageOperations: HydratedDocument<IPageOperationProcessData>[],
+  ): Promise<
+    (HydratedDocument<T> & { processData?: IPageOperationProcessData })[]
+  > {
     if (pageOperations == null || pageOperations.length === 0) {
       return pages.map((page) =>
         Object.assign(page, { processData: undefined }),
