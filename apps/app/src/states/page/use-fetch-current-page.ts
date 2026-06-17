@@ -11,9 +11,9 @@ import { isPermalink } from '@growi/core/dist/utils/page-path-utils';
 import { removeHeadingSlash } from '@growi/core/dist/utils/path-utils';
 import { useAtomValue } from 'jotai';
 import { useAtomCallback } from 'jotai/utils';
+import { mutate } from 'swr';
 
 import { apiv3Get } from '~/client/util/apiv3-client';
-import { useSWRxPageInfo } from '~/stores/page';
 import loggerFactory from '~/utils/logger';
 
 import {
@@ -193,11 +193,6 @@ export const useFetchCurrentPage = (): {
   const isLoading = useAtomValue(pageLoadingAtom);
   const error = useAtomValue(pageErrorAtom);
 
-  const { mutate: mutatePageInfo } = useSWRxPageInfo(
-    currentPageId,
-    shareLinkId,
-  );
-
   const fetchCurrentPage = useAtomCallback(
     useCallback(
       async (
@@ -261,8 +256,19 @@ export const useFetchCurrentPage = (): {
             isIPageNotFoundInfo(meta) ? (meta.isForbidden ?? false) : false,
           );
 
-          // Mutate PageInfo to refetch latest metadata including latestRevisionId
-          mutatePageInfo();
+          // Populate /page/info SWR cache from the /page response metadata
+          // to avoid an extra API call. The /page endpoint already returns
+          // the same metadata that /page/info would provide.
+          if (newData != null && !isIPageNotFoundInfo(meta)) {
+            mutate(
+              (key) =>
+                Array.isArray(key) &&
+                key[0] === '/page/info' &&
+                key[1] === newData._id,
+              meta,
+              { revalidate: false },
+            );
+          }
 
           return newData;
         } catch (err) {
@@ -291,7 +297,7 @@ export const useFetchCurrentPage = (): {
 
         return null;
       },
-      [shareLinkId, mutatePageInfo],
+      [shareLinkId],
     ),
   );
 
