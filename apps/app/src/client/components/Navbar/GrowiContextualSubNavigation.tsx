@@ -1,4 +1,4 @@
-import React, { type JSX, useCallback, useMemo, useState } from 'react';
+import React, { type JSX, memo, useCallback, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
@@ -562,4 +562,4 @@ const GrowiContextualSubNavigation = (
   );
 };
 
-export default GrowiContextualSubNavigation;
+export default memo(GrowiContextualSubNavigation);

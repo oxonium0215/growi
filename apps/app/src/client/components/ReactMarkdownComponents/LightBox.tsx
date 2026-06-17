@@ -39,7 +39,7 @@ export const LightBox = (props: Props): JSX.Element => {
         aria-label={alt ?? 'Open image'}
         onClick={() => setToggler((prev) => !prev)}
       >
-        <img alt={alt} {...rest} />
+        <img alt={alt} loading="lazy" {...rest} />
       </button>
 
       {FsLightbox != null &&
